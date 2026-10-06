@@ -6,6 +6,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import joblib
 import importlib
+import streamlit.components.v1 as components
 from sklearn.neighbors import NearestNeighbors
 from sklearn.preprocessing import StandardScaler
 
@@ -41,6 +42,30 @@ if 'calc_rate' not in st.session_state:
     st.session_state['calc_rate'] = 9.5
 if 'calc_years' not in st.session_state:
     st.session_state['calc_years'] = 3
+
+# ---------------------------------------------------------
+# HELPER: BLOCK BROWSER AUTOFILL VIA JS
+# ---------------------------------------------------------
+def block_browser_autofill():
+    components.html(
+        """
+        <script>
+        const clearAutofill = () => {
+            const inputs = window.parent.document.querySelectorAll('input');
+            inputs.forEach(input => {
+                input.setAttribute('autocomplete', 'new-password');
+                input.setAttribute('aria-autocomplete', 'none');
+                input.setAttribute('disableautocomplete', 'true');
+            });
+        };
+        clearAutofill();
+        setTimeout(clearAutofill, 300);
+        setTimeout(clearAutofill, 800);
+        </script>
+        """,
+        height=0,
+        width=0
+    )
 
 # ---------------------------------------------------------
 # 2. ULTRA-MODERN GLASSMORPHISM & STYLESHEET
@@ -364,10 +389,26 @@ if not st.session_state.get('logged_in', False):
         tab_login, tab_register = st.tabs(["🔐 เข้าสู่ระบบ (Sign In)", "📝 สมัครสมาชิก (Sign Up)"])
         
         with tab_login:
-            with st.form("login_form"):
+            # สั่งรันสคริปต์ปิด Auto-fill ของเบราว์เซอร์
+            block_browser_autofill()
+            
+            with st.form("clean_login_form"):
                 st.markdown("<h4 style='color: #ffffff; margin-bottom: 16px;'>เข้าสู่ระบบพอร์ทัล</h4>", unsafe_allow_html=True)
-                username_input = st.text_input("ชื่อผู้ใช้งาน (Username)", value="admin", key="login_user", placeholder="กรอกชื่อผู้ใช้งาน")
-                password_input = st.text_input("รหัสผ่าน (Password)", type="password", value="123", key="login_pass", placeholder="กรอกรหัสผ่าน")
+                
+                # หลีกเลี่ยงคำว่า (Username) และ (Password) ใน Label และลบค่า default ออก
+                username_input = st.text_input(
+                    "ชื่อผู้ใช้งานระบบ", 
+                    value="", 
+                    key="login_user_v2", 
+                    placeholder="เช่น admin"
+                )
+                password_input = st.text_input(
+                    "รหัสผ่านเข้าใช้งาน", 
+                    type="password", 
+                    value="", 
+                    key="login_pass_v2", 
+                    placeholder="เช่น 123"
+                )
                 
                 st.markdown("<br>", unsafe_allow_html=True)
                 submit_login = st.form_submit_button("เข้าสู่ระบบทันที")
@@ -375,7 +416,10 @@ if not st.session_state.get('logged_in', False):
                 if submit_login:
                     users = st.session_state['registered_users']
                     user_key = username_input.strip().lower()
-                    if user_key in users and users[user_key]['password'] == password_input:
+                    
+                    if not username_input or not password_input:
+                        st.error("กรุณากรอกชื่อผู้ใช้งานและรหัสผ่าน")
+                    elif user_key in users and users[user_key]['password'] == password_input:
                         st.session_state['logged_in'] = True
                         st.session_state['user_info'] = {
                             'id': 1,
@@ -389,12 +433,13 @@ if not st.session_state.get('logged_in', False):
                         st.error("ชื่อผู้ใช้งานหรือรหัสผ่านไม่ถูกต้อง")
 
         with tab_register:
-            with st.form("register_form"):
+            block_browser_autofill()
+            with st.form("clean_register_form"):
                 st.markdown("<h4 style='color: #ffffff; margin-bottom: 16px;'>ลงทะเบียนสมาชิกใหม่</h4>", unsafe_allow_html=True)
-                reg_fullname = st.text_input("ชื่อ-นามสกุล", placeholder="เช่น สมชาย ใจดี", key="reg_name")
-                reg_username = st.text_input("ชื่อผู้ใช้งาน (Username)", placeholder="เช่น somchai_c", key="reg_user")
-                reg_password = st.text_input("รหัสผ่าน (Password)", type="password", placeholder="กำหนดรหัสผ่าน", key="reg_pass")
-                reg_confirm_pass = st.text_input("ยืนยันรหัสผ่าน (Confirm Password)", type="password", placeholder="ยืนยันรหัสผ่านอีกครั้ง", key="reg_conf")
+                reg_fullname = st.text_input("ชื่อ-นามสกุล", value="", placeholder="เช่น สมชาย ใจดี", key="reg_name_v2")
+                reg_username = st.text_input("ชื่อผู้ใช้งานระบบ", value="", placeholder="เช่น somchai_c", key="reg_user_v2")
+                reg_password = st.text_input("กำหนดรหัสผ่าน", type="password", value="", placeholder="กำหนดรหัสผ่าน", key="reg_pass_v2")
+                reg_confirm_pass = st.text_input("ยืนยันรหัสผ่านอีกครั้ง", type="password", value="", placeholder="ยืนยันรหัสผ่านอีกครั้ง", key="reg_conf_v2")
                 reg_role = st.selectbox(
                     "ตำแหน่ง / บทบาทหน้าที่",
                     ["เจ้าหน้าที่อนุมัติสินเชื่อ (Credit Officer)", "ผู้จัดการฝ่ายสินเชื่อ (Manager)", "นักวิเคราะห์ความเสี่ยง (Risk Analyst)"]
@@ -579,7 +624,7 @@ menu = st.radio(
 # ---------------------------------------------------------
 
 # =========================================================
-# PAGE 1: ประเมินและอนุมัติสินเชื่อ (ALL FUNCTIONS RESTORED)
+# PAGE 1: ประเมินและอนุมัติสินเชื่อ
 # =========================================================
 if menu == "ประเมินและอนุมัติสินเชื่อ":
     if model is None:
