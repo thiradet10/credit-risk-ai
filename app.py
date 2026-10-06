@@ -492,6 +492,7 @@ if not st.session_state.get('logged_in', False):
                         st.session_state['eval_history'] = []  # เคลียร์ประวัติค้าง
                         st.success("🎉 สมัครสมาชิกเสร็จสิ้น! ท่านสามารถสลับไปที่แท็บ 'เข้าสู่ระบบ' เพื่อใช้งานได้ทันที")
                         st.toast("สมัครสมาชิกเสร็จสิ้นเรียบร้อยแล้ว!", icon="✅")
+
                         st.balloons()
 
     st.stop()
@@ -708,41 +709,53 @@ if menu == "ประเมินและอนุมัติสินเช�
 
     with col_input1:
         st.markdown("<h4 style='color: #ffffff; margin-bottom: 16px;'>ข้อมูลส่วนบุคคลและรายได้</h4>", unsafe_allow_html=True)
+        # เปลี่ยน value=30 เป็น value=None
         age = st.number_input(
             "อายุผู้ขอสินเชื่อ (ปี) [person_age]", 
-            min_value=18, max_value=100, value=30, placeholder="เช่น 32", step=1
+            min_value=18, max_value=100, value=None, placeholder="เช่น 30", step=1
         )
+        # เปลี่ยน value=45000 เป็น value=None
         monthly_income = st.number_input(
             "รายได้ประจำต่อเดือน (บาท)", 
-            min_value=1000, value=45000, placeholder="เช่น 45000", step=1000, format="%d"
+            min_value=1000, value=None, placeholder="เช่น 45000", step=1000, format="%d"
         )
-        annual_income = monthly_income * 12
+        
+        annual_income = (monthly_income * 12) if monthly_income else 0
         st.caption(f"รายได้รวมต่อปี (person_income): ฿{annual_income:,.0f}")
 
+        # เปลี่ยน value=5000 เป็น value=None
         existing_debt = st.number_input(
             "ภาระหนี้ผ่อนเดิมต่อเดือน (บาท)", 
-            min_value=0, value=5000, placeholder="เช่น 5000 (หากไม่มีให้ใส่ 0)", step=500, format="%d",
+            min_value=0, value=None, placeholder="เช่น 5000 (หากไม่มีให้ใส่ 0)", step=500, format="%d",
             help="รวมค่างวดผ่อนบ้าน รถ บัตรเครดิตที่มีอยู่แล้ว"
         )
 
     with col_input2:
         st.markdown("<h4 style='color: #ffffff; margin-bottom: 16px;'>ข้อมูลสินเชื่อและประวัติเครดิต</h4>", unsafe_allow_html=True)
+        # เปลี่ยน value=150000 เป็น value=None
         loan_amount = st.number_input(
             "วงเงินกู้ที่ต้องการ (บาท) [loan_amnt]", 
-            min_value=1000, value=150000, placeholder="เช่น 150000", step=5000, format="%d"
+            min_value=1000, value=None, placeholder="เช่น 150000", step=5000, format="%d"
         )
+        # เปลี่ยน value=9.5 เป็น value=None
         interest_rate = st.number_input(
             "อัตราดอกเบี้ยต่อปี (%) [loan_int_rate]", 
-            min_value=0.1, max_value=40.0, value=9.5, placeholder="เช่น 9.5", step=0.1
+            min_value=0.1, max_value=40.0, value=None, placeholder="เช่น 9.5", step=0.1
         )
+        # เปลี่ยน value=4 เป็น value=None
         cred_hist_length = st.number_input(
             "ระยะเวลาประวัติเครดิต (ปี) [cb_person_cred_hist_length]", 
-            min_value=0, max_value=50, value=4, placeholder="เช่น 4", step=1
+            min_value=0, max_value=50, value=None, placeholder="เช่น 4", step=1
         )
         loan_years = st.slider("ระยะเวลาผ่อนชำระที่ต้องการ (ปี)", min_value=1, max_value=7, value=int(st.session_state.get('calc_years', 3)))
 
     st.markdown("<br>", unsafe_allow_html=True)
     process_btn = st.button("ประมวลผลวิเคราะห์อนุมัติสินเชื่อ")
+
+    # ตรวจสอบว่าผู้ใช้กรอกข้อมูลครบถ้วนหรือไม่ก่อนเริ่มประมวลผล
+    if age is None or monthly_income is None or loan_amount is None or interest_rate is None or cred_hist_length is None:
+        st.info("💡 กรุณากรอกข้อมูลผู้ขอสินเชื่อและข้อมูลการกู้ให้ครบถ้วนทุกช่องเพื่อประเมินผล")
+        st.stop()
 
     debt_val = existing_debt if existing_debt is not None else 0
 
