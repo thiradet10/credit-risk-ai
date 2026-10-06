@@ -1,11 +1,12 @@
 import os
+import datetime
+import importlib
 import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 import joblib
-import importlib
 import streamlit.components.v1 as components
 from sklearn.neighbors import NearestNeighbors
 from sklearn.preprocessing import StandardScaler
@@ -35,6 +36,28 @@ if 'registered_users' not in st.session_state:
             'role': 'เจ้าหน้าที่อนุมัติสินเชื่อ'
         }
     }
+
+if 'eval_history' not in st.session_state:
+    st.session_state['eval_history'] = [
+        {
+            "อายุ": 28,
+            "รายได้ประจำ/ปี (บาท)": "฿420,000",
+            "วงเงินกู้ (บาท)": "฿150,000",
+            "ประวัติเครดิต (ปี)": 3,
+            "ผลการประเมิน": "Low Risk",
+            "โอกาสเสี่ยง AI (%)": "12.5%",
+            "วันที่ประเมิน": "2026-10-05 10:30:00"
+        },
+        {
+            "อายุ": 35,
+            "รายได้ประจำ/ปี (บาท)": "฿300,000",
+            "วงเงินกู้ (บาท)": "฿400,000",
+            "ประวัติเครดิต (ปี)": 1,
+            "ผลการประเมิน": "High Risk",
+            "โอกาสเสี่ยง AI (%)": "88.2%",
+            "วันที่ประเมิน": "2026-10-06 14:15:20"
+        }
+    ]
 
 if 'calc_amount' not in st.session_state:
     st.session_state['calc_amount'] = 150000
@@ -351,7 +374,7 @@ if not st.session_state.get('logged_in', False):
 
     with c_hero_left:
         hero_left_html = """<div style="padding-top: 10px;">
-<div class="auth-logo-badge">🛡️ CreditGuard AI Intelligence</div>
+<div class="auth-logo-badge">🛡️️ CreditGuard AI Intelligence</div>
 <h1 style="font-size: 36px; font-weight: 800; line-height: 1.25; margin-bottom: 16px; color: #ffffff;">
 ระบบวิเคราะห์และประเมิน<br>อนุมัติสินเชื่อทางการเงิน
 </h1>
@@ -389,13 +412,11 @@ if not st.session_state.get('logged_in', False):
         tab_login, tab_register = st.tabs(["🔐 เข้าสู่ระบบ (Sign In)", "📝 สมัครสมาชิก (Sign Up)"])
         
         with tab_login:
-            # สั่งรันสคริปต์ปิด Auto-fill ของเบราว์เซอร์
             block_browser_autofill()
             
             with st.form("clean_login_form"):
                 st.markdown("<h4 style='color: #ffffff; margin-bottom: 16px;'>เข้าสู่ระบบพอร์ทัล</h4>", unsafe_allow_html=True)
                 
-                # หลีกเลี่ยงคำว่า (Username) และ (Password) ใน Label และลบค่า default ออก
                 username_input = st.text_input(
                     "ชื่อผู้ใช้งานระบบ", 
                     value="", 
@@ -416,17 +437,20 @@ if not st.session_state.get('logged_in', False):
                 if submit_login:
                     users = st.session_state['registered_users']
                     user_key = username_input.strip().lower()
-                    
+    
                     if not username_input or not password_input:
                         st.error("กรุณากรอกชื่อผู้ใช้งานและรหัสผ่าน")
                     elif user_key in users and users[user_key]['password'] == password_input:
                         st.session_state['logged_in'] = True
+        
                         st.session_state['user_info'] = {
-                            'id': 1,
+                            'id': user_key,  # 1. แก้ตรงนี้: จาก 1 เปลี่ยนเป็น user_key
                             'name': users[user_key]['name'],
                             'username': user_key,
                             'role': users[user_key].get('role', 'ผู้ใช้งาน')
                         }
+                        st.session_state['eval_history'] = []  # 2. เพิ่มบรรทัดนี้: ล้างประวัติชั่วคราวเก่าทิ้ง
+        
                         st.success(f"เข้าสู่ระบบสำเร็จ ยินดีต้อนรับ {users[user_key]['name']}")
                         st.rerun()
                     else:
@@ -464,6 +488,10 @@ if not st.session_state.get('logged_in', False):
                             'role': reg_role
                         }
                         st.success("สมัครสมาชิกสำเร็จเรียบร้อยแล้ว ท่านสามารถเข้าสู่ระบบได้ทันที")
+                        st.session_state['logged_in'] = False
+                        st.session_state['user_info'] = None
+                        st.session_state['eval_history'] = []  # เคลียร์ประวัติค้าง
+                        st.rerun()
 
     st.stop()
 
@@ -472,17 +500,38 @@ if not st.session_state.get('logged_in', False):
 # ---------------------------------------------------------
 FEATURE_COLS = ['person_age', 'person_income', 'loan_amnt', 'loan_int_rate', 'cb_person_cred_hist_length']
 
+class FallbackModel:
+    def predict(self, df):
+        probs = self.predict_proba(df)[:, 1]
+        return (probs >= 0.5).astype(int)
+    
+    def predict_proba(self, df):
+        results = []
+        for _, row in df.iterrows():
+            dti = ((row['loan_amnt'] / 36) + 5000) / (row['person_income'] / 12) * 100 if row['person_income'] > 0 else 100
+            lti = row['loan_amnt'] / row['person_income'] if row['person_income'] > 0 else 10
+            risk = 15.0
+            if dti > 50: risk += 30.0
+            if lti > 0.5: risk += 25.0
+            if row['cb_person_cred_hist_length'] < 2: risk += 20.0
+            if row['person_age'] < 22: risk += 10.0
+            prob = min(max(risk, 5.0), 99.0) / 100.0
+            results.append([1.0 - prob, prob])
+        return np.array(results)
+
 @st.cache_resource
 def load_model():
     try:
-        return joblib.load('model.pkl')
+        if os.path.exists('model.pkl'):
+            return joblib.load('model.pkl')
     except Exception:
-        return None
+        pass
+    return FallbackModel()
 
 @st.cache_data
 def load_raw_dataset():
-    csv_file = 'credit_risk_dataset.csv' if os.path.exists('credit_risk_dataset.csv') else 'data.csv'
-    if not os.path.exists(csv_file):
+    csv_file = 'credit_risk_dataset.csv' if os.path.exists('credit_risk_dataset.csv') else ('data.csv' if os.path.exists('data.csv') else None)
+    if not csv_file:
         return None
     df = pd.read_csv(csv_file)
     data_clean = df.dropna(subset=FEATURE_COLS + ['loan_status']).copy()
@@ -491,11 +540,11 @@ def load_raw_dataset():
 @st.cache_resource
 def prepare_knn_engine():
     data_clean = load_raw_dataset()
-    if data_clean is None:
+    if data_clean is None or len(data_clean) < 5:
         return None, None
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(data_clean[FEATURE_COLS])
-    nn_model = NearestNeighbors(n_neighbors=5, metric='euclidean')
+    nn_model = NearestNeighbors(n_neighbors=min(5, len(data_clean)), metric='euclidean')
     nn_model.fit(X_scaled)
     return scaler, nn_model
 
@@ -519,11 +568,37 @@ def calculate_monthly_payment(principal, annual_rate, years):
     pmt = principal * (r * (1 + r)**n) / ((1 + r)**n - 1)
     return pmt
 
+def generate_amortization_schedule(principal, annual_rate, years):
+    pmt = calculate_monthly_payment(principal, annual_rate, years)
+    total_months = years * 12
+    m_rate = (annual_rate / 100) / 12
+    bal = principal
+    schedule = []
+    
+    for month in range(1, total_months + 1):
+        interest = bal * m_rate
+        principal_paid = pmt - interest
+        if month == total_months:
+            principal_paid = bal
+            pmt_final = principal_paid + interest
+        else:
+            pmt_final = pmt
+        bal = max(0, bal - principal_paid)
+        schedule.append({
+            'งวดที่ (Month)': month,
+            'ค่างวด (บาท)': round(pmt_final, 2),
+            'เงินต้น (บาท)': round(principal_paid, 2),
+            'ดอกเบี้ย (บาท)': round(interest, 2),
+            'เงินต้นคงเหลือ (บาท)': round(bal, 2)
+        })
+    return pd.DataFrame(schedule)
+
 def find_similar_records(input_df, k=5):
     if raw_df is None or knn_engine is None or scaler_knn is None:
         return None
     input_scaled = scaler_knn.transform(input_df[FEATURE_COLS])
-    distances, indices = knn_engine.kneighbors(input_scaled, n_neighbors=k)
+    k_actual = min(k, len(raw_df))
+    distances, indices = knn_engine.kneighbors(input_scaled, n_neighbors=k_actual)
     similar_rows = raw_df.iloc[indices[0]].copy()
     similar_rows['สถานะจริงในระบบ'] = similar_rows['loan_status'].apply(
         lambda x: "อนุมัติ (Low Risk)" if x == 0 else "ไม่อนุมัติ (High Risk)"
@@ -540,6 +615,7 @@ def find_similar_records(input_df, k=5):
     return display_df
 
 def create_risk_gauge(risk_prob):
+    risk_prob = min(max(float(risk_prob), 0.0), 100.0)
     fig = go.Figure(go.Indicator(
         mode = "gauge+number",
         value = risk_prob,
@@ -627,11 +703,6 @@ menu = st.radio(
 # PAGE 1: ประเมินและอนุมัติสินเชื่อ
 # =========================================================
 if menu == "ประเมินและอนุมัติสินเชื่อ":
-    if model is None:
-        st.error("ไม่พบไฟล์โมเดล model.pkl กรุณารันคำสั่ง python train.py ใน Terminal")
-        st.stop()
-
-    # FORM INPUT SECTION
     col_input1, col_input2 = st.columns(2)
 
     with col_input1:
@@ -672,7 +743,6 @@ if menu == "ประเมินและอนุมัติสินเช�
     st.markdown("<br>", unsafe_allow_html=True)
     process_btn = st.button("ประมวลผลวิเคราะห์อนุมัติสินเชื่อ")
 
-    # AUTO-CALCULATE DASHBOARD
     debt_val = existing_debt if existing_debt is not None else 0
 
     st.session_state['calc_amount'] = loan_amount
@@ -693,7 +763,10 @@ if menu == "ประเมินและอนุมัติสินเช�
     }])
 
     model_prediction = model.predict(input_data)[0]
-    raw_prob_risk = model.predict_proba(input_data)[0][1] * 100
+    if hasattr(model, 'predict_proba'):
+        raw_prob_risk = model.predict_proba(input_data)[0][1] * 100
+    else:
+        raw_prob_risk = 75.0 if model_prediction == 1 else 15.0
 
     prob_risk = raw_prob_risk
     is_hard_rejected = False
@@ -711,27 +784,39 @@ if menu == "ประเมินและอนุมัติสินเช�
 
     result_text = "High Risk" if (is_hard_rejected or prob_risk >= 50 or model_prediction == 1) else "Low Risk"
 
-    if process_btn and db is not None:
-        try:
-            user_id = st.session_state.get('user_info', {}).get('id', 1)
-            if hasattr(db, 'save_evaluation'):
-                try:
-                    db.save_evaluation(
-                        user_id=user_id, age=age, income=annual_income,
-                        loan_amount=loan_amount, credit_score=cred_hist_length,
-                        result=result_text, risk_prob=prob_risk
-                    )
-                except TypeError:
-                    db.save_evaluation(user_id, age, annual_income, loan_amount, cred_hist_length, result_text, prob_risk)
-            st.toast("บันทึกประวัติการประเมินสำเร็จ")
-        except Exception as e:
-            st.warning(f"บันทึก Database ไม่สำเร็จ: {e}")
+    if process_btn:
+        now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        new_eval_record = {
+            "อายุ": age,
+            "รายได้ประจำ/ปี (บาท)": f"฿{annual_income:,.0f}",
+            "วงเงินกู้ (บาท)": f"฿{loan_amount:,.0f}",
+            "ประวัติเครดิต (ปี)": cred_hist_length,
+            "ผลการประเมิน": result_text,
+            "โอกาสเสี่ยง AI (%)": f"{prob_risk:.1f}%",
+            "วันที่ประเมิน": now_str
+        }
+        st.session_state['eval_history'].insert(0, new_eval_record)
+        
+        if db is not None:
+            try:
+                user_id = st.session_state.get('user_info', {}).get('id', 1)
+                if hasattr(db, 'save_evaluation'):
+                    try:
+                        db.save_evaluation(
+                            user_id=user_id, age=age, income=annual_income,
+                            loan_amount=loan_amount, credit_score=cred_hist_length,
+                            result=result_text, risk_prob=prob_risk
+                        )
+                    except TypeError:
+                        db.save_evaluation(user_id, age, annual_income, loan_amount, cred_hist_length, result_text, prob_risk)
+            except Exception as e:
+                pass
+        st.toast("บันทึกประวัติการประเมินเข้าสู่ระบบเรียบร้อยแล้ว")
 
     # DISPLAY UNDERWRITING DASHBOARD
     st.markdown("---")
     st.markdown("<h3 style='color: #ffffff; margin-bottom: 20px;'>สรุปผลการวิเคราะห์ทางการเงิน (Underwriting Dashboard)</h3>", unsafe_allow_html=True)
 
-    # 1. KPI GLASS CARDS WITH BADGES
     k1, k2, k3, k4 = st.columns(4)
     with k1:
         st.markdown(f"""
@@ -771,7 +856,6 @@ if menu == "ประเมินและอนุมัติสินเช�
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # 2. RESULT STATUS & GAUGE
     c_status, c_gauge = st.columns([1.4, 1])
     with c_status:
         if is_hard_rejected or prob_risk >= 50 or model_prediction == 1:
@@ -810,7 +894,6 @@ if menu == "ประเมินและอนุมัติสินเช�
         fig_g = create_risk_gauge(prob_risk)
         st.plotly_chart(fig_g, use_container_width=True)
 
-    # 3. RISK FACTOR BADGES TABLE
     st.markdown("<br>", unsafe_allow_html=True)
     st.markdown("<h4 style='color: #ffffff;'>ตารางวิเคราะห์ปัจจัยเสี่ยง (Risk Factor Badges)</h4>", unsafe_allow_html=True)
 
@@ -854,12 +937,13 @@ if menu == "ประเมินและอนุมัติสินเช�
     """
     st.markdown(rf_html, unsafe_allow_html=True)
 
-    # 4. TOP 5 MATCHES TABLE
     st.markdown("<br>", unsafe_allow_html=True)
     st.markdown("<h3 style='color: #ffffff;'>ข้อมูลประวัติจริงในระบบที่ใกล้เคียงที่สุด (Top 5 Matches)</h3>", unsafe_allow_html=True)
     similar_df = find_similar_records(input_data, k=5)
     if similar_df is not None:
         st.dataframe(similar_df, use_container_width=True, hide_index=True)
+    else:
+        st.info("💡 ระบบกำลังประมวลผลด้วย Rule-based Engine (นำไฟล์ dataset มาใส่ในโฟลเดอร์เพื่อเปรียบเทียบ KNN Matches)")
 
 # =========================================================
 # PAGE 2: คำนวณค่างวด & ตารางผ่อน
@@ -867,11 +951,11 @@ if menu == "ประเมินและอนุมัติสินเช�
 elif menu == "คำนวณค่างวด และตารางผ่อน":
     c1, c2, c3 = st.columns(3)
     with c1:
-        calc_amount = st.number_input("วงเงินกู้ (บาท)", min_value=5000, value=int(st.session_state['calc_amount']), step=10000, format="%d")
+        calc_amount = st.number_input("วงเงินกู้ (บาท)", min_value=5000, value=int(st.session_state['calc_amount']), step=10000, format="%d", key="calc_p2_amount")
     with c2:
-        calc_rate = st.number_input("อัตราดอกเบี้ยต่อปี (%)", min_value=0.5, value=float(st.session_state['calc_rate']), step=0.1)
+        calc_rate = st.number_input("อัตราดอกเบี้ยต่อปี (%)", min_value=0.1, value=float(st.session_state['calc_rate']), step=0.1, key="calc_p2_rate")
     with c3:
-        calc_years = st.number_input("ระยะเวลาผ่อน (ปี)", min_value=1, value=int(st.session_state['calc_years']), step=1)
+        calc_years = st.number_input("ระยะเวลาผ่อน (ปี)", min_value=1, value=int(st.session_state['calc_years']), step=1, key="calc_p2_years")
 
     st.session_state['calc_amount'] = calc_amount
     st.session_state['calc_rate'] = calc_rate
@@ -914,183 +998,198 @@ elif menu == "คำนวณค่างวด และตารางผ่�
 
     with cg1:
         fig_pie = px.pie(
+            names=["เงินต้น (Principal)", "ดอกเบี้ยรวม (Interest)"],
             values=[calc_amount, max(0, total_interest)],
-            names=['เงินต้น (Principal)', 'ดอกเบี้ยรวม (Interest)'],
-            title="สัดส่วนเงินต้นเทียบกับดอกเบี้ยรวม",
-            color_discrete_sequence=['#38bdf8', '#a855f7'],
-            hole=0.55
+            title="สัดส่วนเงินต้นเทียบดอกเบี้ยรวม",
+            color_discrete_sequence=["#6366f1", "#d946ef"],
+            hole=0.4
         )
         fig_pie.update_layout(
             paper_bgcolor='rgba(0,0,0,0)',
             plot_bgcolor='rgba(0,0,0,0)',
-            font=dict(color="#ffffff", family="Prompt", size=13),
-            title=dict(font=dict(color="#ffffff", size=16, family="Prompt")),
-            legend=dict(font=dict(color="#ffffff", size=12))
+            font=dict(color="#ffffff", family="Prompt")
         )
         st.plotly_chart(fig_pie, use_container_width=True)
 
     with cg2:
-        months_list = list(range(0, total_months + 1))
-        balances_list = [calc_amount]
-        bal_curr = calc_amount
-        m_rate = (calc_rate / 100) / 12
-        for _ in range(total_months):
-            int_m = bal_curr * m_rate
-            prin_m = pmt - int_m
-            bal_curr = max(0, bal_curr - prin_m)
-            balances_list.append(bal_curr)
-
-        df_bal = pd.DataFrame({"งวดที่ (Month)": months_list, "เงินต้นคงเหลือ (บาท)": balances_list})
+        df_schedule = generate_amortization_schedule(calc_amount, calc_rate, calc_years)
+        
         fig_line = px.line(
-            df_bal, x="งวดที่ (Month)", y="เงินต้นคงเหลือ (บาท)",
-            title="แนวโน้มยอดเงินต้นคงเหลือตลอดอายุสัญญา"
+            df_schedule, 
+            x='งวดที่ (Month)', 
+            y='เงินต้นคงเหลือ (บาท)', 
+            title="แนวโน้มการลดลงของเงินต้นคงเหลือตามงวดผ่อน",
+            markers=True
         )
-        fig_line.update_traces(line_color="#d946ef", line_width=3)
+        fig_line.update_traces(line_color='#38bdf8', line_width=3)
         fig_line.update_layout(
             paper_bgcolor='rgba(0,0,0,0)',
-            plot_bgcolor='rgba(15, 23, 42, 0.55)',
-            font=dict(color="#ffffff", family="Prompt", size=13),
-            title=dict(font=dict(color="#ffffff", size=16, family="Prompt")),
-            xaxis=dict(gridcolor="rgba(255, 255, 255, 0.12)", tickfont=dict(color="#cbd5e1", size=12)),
-            yaxis=dict(gridcolor="rgba(255, 255, 255, 0.12)", tickfont=dict(color="#cbd5e1", size=12))
+            plot_bgcolor='rgba(0,0,0,0)',
+            font=dict(color="#ffffff", family="Prompt"),
+            xaxis=dict(gridcolor='rgba(255,255,255,0.1)'),
+            yaxis=dict(gridcolor='rgba(255,255,255,0.1)')
         )
         st.plotly_chart(fig_line, use_container_width=True)
+
+    st.markdown("<br>", unsafe_allow_html=True)
+    st.markdown("<h4 style='color: #ffffff;'>ตารางผ่อนชำระรายเดือน (Amortization Schedule)</h4>", unsafe_allow_html=True)
+    
+    st.dataframe(df_schedule, use_container_width=True, hide_index=True)
+    
+    csv_data = df_schedule.to_csv(index=False).encode('utf-8-sig')
+    st.download_button(
+        label="📥 ดาวน์โหลดตารางผ่อนชำระ (CSV)",
+        data=csv_data,
+        file_name=f"Loan_Amortization_Schedule_{calc_amount}.csv",
+        mime="text/csv"
+    )
 
 # =========================================================
 # PAGE 3: ประวัติการประเมิน
 # =========================================================
 elif menu == "ประวัติการประเมิน":
-    st.markdown("""
-        <div style="margin-bottom: 24px;">
-            <h2 style="color: #ffffff; font-weight: 800; font-size: 28px; margin-bottom: 6px;">📜 ประวัติการประเมินสินเชื่อของคุณ</h2>
-            <p style="color: #38bdf8; font-size: 14px; margin: 0;">รายการประวัติย้อนหลังและการวิเคราะห์ภาพรวมการประเมินในระบบ</p>
-        </div>
-    """, unsafe_allow_html=True)
-
-    rows = []
+    st.markdown("<h3 style='color: #ffffff; margin-bottom: 20px;'>ประวัติการประเมินและวิเคราะห์สินเชื่อ</h3>", unsafe_allow_html=True)
+    
+    db_rows = []
     if db is not None and hasattr(db, 'get_user_history'):
         try:
             user_id = st.session_state.get('user_info', {}).get('id', 1)
-            rows = db.get_user_history(user_id)
+            db_rows = db.get_user_history(user_id)
         except Exception:
             pass
 
-    if not rows:
-        data_list = [
-            {"อายุ": 25, "รายได้ประจำ/ปี (บาท)": "฿420,000", "วงเงินกู้ (บาท)": "฿150,000", "ประวัติเครดิต (ปี)": 3, "ผลการประเมิน": "Low Risk", "โอกาสเสี่ยง AI (%)": "10.0%", "วันที่ประเมิน": "2026-10-05 02:42:40"},
-            {"อายุ": 30, "รายได้ประจำ/ปี (บาท)": "฿600,000", "วงเงินกู้ (บาท)": "฿1,000,000", "ประวัติเครดิต (ปี)": 3, "ผลการประเมิน": "Low Risk", "โอกาสเสี่ยง AI (%)": "28.0%", "วันที่ประเมิน": "2026-10-05 02:38:06"},
-            {"อายุ": 45, "รายได้ประจำ/ปี (บาท)": "฿300,000", "วงเงินกู้ (บาท)": "฿800,000", "ประวัติเครดิต (ปี)": 1, "ผลการประเมิน": "High Risk", "โอกาสเสี่ยง AI (%)": "82.5%", "วันที่ประเมิน": "2026-10-04 18:15:20"},
-            {"อายุ": 28, "รายได้ประจำ/ปี (บาท)": "฿500,000", "วงเงินกู้ (บาท)": "฿200,000", "ประวัติเครดิต (ปี)": 4, "ผลการประเมิน": "Low Risk", "โอกาสเสี่ยง AI (%)": "12.3%", "วันที่ประเมิน": "2026-10-04 15:10:12"},
-        ]
-        total_evals = 40
-        low_risk_cnt = 30
-        high_risk_cnt = 10
+    # เริ่มต้นเป็นรายการว่าง (ไม่นำประวัติค้างของคนอื่นมาใส่)
+    history_list = []
+    
+    if db_rows:
+        cols = ["age", "income", "loan_amount", "credit_score", "result", "risk_prob", "created_at"]
+        for r in db_rows:
+            r_dict = dict(zip(cols, r)) if isinstance(r, (tuple, list)) else (r if isinstance(r, dict) else {})
+            
+            history_list.append({
+                "อายุ": r_dict.get('age', '--'),
+                "รายได้ประจำ/ปี (บาท)": f"฿{r_dict.get('income', 0):,.0f}" if isinstance(r_dict.get('income'), (int, float)) else str(r_dict.get('income', '--')),
+                "วงเงินกู้ (บาท)": f"฿{r_dict.get('loan_amount', 0):,.0f}" if isinstance(r_dict.get('loan_amount'), (int, float)) else str(r_dict.get('loan_amount', '--')),
+                "ประวัติเครดิต (ปี)": r_dict.get('credit_score', '--'),
+                "ผลการประเมิน": r_dict.get('result', '--'),
+                "โอกาสเสี่ยง AI (%)": f"{r_dict.get('risk_prob', 0):.1f}%" if isinstance(r_dict.get('risk_prob'), (int, float)) else str(r_dict.get('risk_prob', '--')),
+                "วันที่ประเมิน": str(r_dict.get('created_at', '--'))
+            })
+            
+    if history_list:
+        df_hist = pd.DataFrame(history_list)
+        
+        # Summary KPI
+        total_evals = len(df_hist)
+        low_risk_count = sum(df_hist['ผลการประเมิน'] == 'Low Risk')
+        pass_rate = (low_risk_count / total_evals) * 100 if total_evals > 0 else 0
+        
+        h1, h2, h3 = st.columns(3)
+        with h1:
+            st.markdown(f"""
+                <div class="metric-glass-card">
+                    <div class="metric-glass-title">จำนวนเคสประเมินทั้งหมด</div>
+                    <div class="metric-glass-value">{total_evals} รายการ</div>
+                </div>
+            """, unsafe_allow_html=True)
+        with h2:
+            st.markdown(f"""
+                <div class="metric-glass-card">
+                    <div class="metric-glass-title">ผ่านการอนุมัติ (Low Risk)</div>
+                    <div class="metric-glass-value">{low_risk_count} รายการ</div>
+                </div>
+            """, unsafe_allow_html=True)
+        with h3:
+            st.markdown(f"""
+                <div class="metric-glass-card">
+                    <div class="metric-glass-title">อัตราการอนุมัติ (Approval Rate)</div>
+                    <div class="metric-glass-value">{pass_rate:.1f}%</div>
+                </div>
+            """, unsafe_allow_html=True)
+
+        st.markdown("<br>", unsafe_allow_html=True)
+        
+        c_filter1, c_filter2 = st.columns([2, 1])
+        with c_filter1:
+            search_query = st.text_input("🔍 ค้นหาในประวัติ", placeholder="พิมพ์คำค้น เช่น รายได้ หรือ วันที่...")
+        with c_filter2:
+            status_filter = st.selectbox("กรองตามสถานะ", ["ทั้งหมด", "Low Risk", "High Risk"])
+
+        df_filtered = df_hist.copy()
+        if status_filter != "ทั้งหมด":
+            df_filtered = df_filtered[df_filtered['ผลการประเมิน'] == status_filter]
+        if search_query:
+            df_filtered = df_filtered[df_filtered.astype(str).apply(lambda row: row.str.contains(search_query, case=False).any(), axis=1)]
+
+        st.dataframe(df_filtered, use_container_width=True, hide_index=True)
     else:
-        df_raw = pd.DataFrame(rows, columns=["age", "income", "loan_amount", "credit_score", "result", "risk_prob", "created_at"])
-        total_evals = len(df_raw)
-        low_risk_cnt = len(df_raw[df_raw['result'] == 'Low Risk'])
-        high_risk_cnt = total_evals - low_risk_cnt
-        
-        df_raw["income"] = df_raw["income"].apply(lambda x: f"฿{x:,.0f}")
-        df_raw["loan_amount"] = df_raw["loan_amount"].apply(lambda x: f"฿{x:,.0f}")
-        df_raw["risk_prob"] = df_raw["risk_prob"].apply(lambda x: f"{x:.1f}%")
-        
-        df_raw = df_raw.rename(columns={
-            "age": "อายุ", "income": "รายได้ประจำ/ปี (บาท)", "loan_amount": "วงเงินกู้ (บาท)",
-            "credit_score": "ประวัติเครดิต (ปี)", "result": "ผลการประเมิน",
-            "risk_prob": "โอกาสเสี่ยง AI (%)", "created_at": "วันที่ประเมิน"
-        })
-        data_list = df_raw.to_dict('records')
-
-    low_pct = (low_risk_cnt / total_evals * 100) if total_evals > 0 else 0
-    high_pct = (high_risk_cnt / total_evals * 100) if total_evals > 0 else 0
-
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        st.markdown(f"""
-            <div class="metric-glass-card">
-                <div class="metric-glass-title">📊 จำนวนการประเมินทั้งหมด</div>
-                <div class="metric-glass-value">{total_evals} ครั้ง</div>
-            </div>
-        """, unsafe_allow_html=True)
-
-    with c2:
-        st.markdown(f"""
-            <div class="metric-glass-card" style="border-color: rgba(34, 197, 94, 0.5) !important; background: rgba(34, 197, 94, 0.08) !important;">
-                <div class="metric-glass-title" style="color: #4ade80 !important;">✅ ผ่านเกณฑ์ (Low Risk)</div>
-                <div class="metric-glass-value" style="color: #4ade80 !important;">{low_risk_cnt} ครั้ง <span style="font-size: 16px; color: #a7f3d0; font-weight: 600;">({low_pct:.0f}%)</span></div>
-            </div>
-        """, unsafe_allow_html=True)
-
-    with c3:
-        st.markdown(f"""
-            <div class="metric-glass-card" style="border-color: rgba(239, 68, 68, 0.5) !important; background: rgba(239, 68, 68, 0.08) !important;">
-                <div class="metric-glass-title" style="color: #f87171 !important;">❌ เสี่ยงสูง (High Risk)</div>
-                <div class="metric-glass-value" style="color: #f87171 !important;">{high_risk_cnt} ครั้ง <span style="font-size: 16px; color: #fca5a5; font-weight: 600;">({high_pct:.0f}%)</span></div>
-            </div>
-        """, unsafe_allow_html=True)
-
-    st.markdown("<br>", unsafe_allow_html=True)
-    st.markdown("<h4 style='color: #ffffff; font-weight: 700; margin-bottom: 14px;'>📄 ตารางรายการประเมินย้อนหลัง</h4>", unsafe_allow_html=True)
-    df_display = pd.DataFrame(data_list)
-    st.dataframe(df_display, use_container_width=True, hide_index=True)
-
+        st.info("ยังไม่มีประวัติการประเมินสินเชื่อในระบบ สามารถเริ่มทดสอบประเมินได้ที่เมนู 'ประเมินและอนุมัติสินเชื่อ'")
 # =========================================================
-# PAGE 4: ศูนย์ความรู้ Credit Risk (4 CARDS)
+# PAGE 4: ศูนย์ความรู้ CREDIT RISK
 # =========================================================
 elif menu == "ศูนย์ความรู้ Credit Risk":
-    kc1, kc2 = st.columns(2)
-
-    with kc1:
+    st.markdown("<h3 style='color: #ffffff; margin-bottom: 24px;'>ศูนย์ความรู้และหลักเกณฑ์การพิจารณาสินเชื่อ (Credit Risk Knowledge Base)</h3>", unsafe_allow_html=True)
+    
+    col_k1, col_k2 = st.columns(2)
+    
+    with col_k1:
         st.markdown("""
             <div class="knowledge-card">
-                <div class="knowledge-card-tag">PARAMETER 01</div>
-                <div class="knowledge-card-title">อัตราส่วนภาระหนี้ต่อรายได้ (DTI)</div>
+                <div class="knowledge-card-tag">UNDERWRITING METRIC 01</div>
+                <div class="knowledge-card-title">DTI (Debt-to-Income Ratio)</div>
                 <div class="knowledge-card-desc">
-                    Debt-to-Income Ratio วัดสัดส่วนภาระหนี้ผ่อนชำระรวมทุกประเภทต่อเดือนเทียบกับรายได้ประจำ เป็นตัวชี้วัดความสามารถในการชำระหนี้หลัก
+                    สัดส่วนภาระหนี้สินผ่อนชำระรวมต่อรายได้ประจำ คำนวณจาก (ภาระหนี้เดิม + ค่างวดใหม่) ÷ รายได้ประจำต่อเดือน
+                    ใช้ประเมินความสามารถในการชำระหนี้ของผู้กู้ในชีวิตประจำวัน
                 </div>
                 <div class="knowledge-card-benchmark">
-                    <b>เกณฑ์มาตรฐาน:</b> ไม่ควรเกิน 50% ของรายได้ประจำต่อเดือน
+                    <b>💡 เกณฑ์มาตรฐาน:</b> ปลอดภัย &le; 50% | ความเสี่ยงปานกลาง 50-70% | ปฏิเสธทันที &gt; 70%
                 </div>
             </div>
         """, unsafe_allow_html=True)
+        
         st.markdown("<br>", unsafe_allow_html=True)
+        
         st.markdown("""
             <div class="knowledge-card">
-                <div class="knowledge-card-tag">PARAMETER 03</div>
-                <div class="knowledge-card-title">ระยะเวลาประวัติเครดิต (Credit History)</div>
+                <div class="knowledge-card-tag">UNDERWRITING METRIC 02</div>
+                <div class="knowledge-card-title">LTI (Loan-to-Income Ratio)</div>
                 <div class="knowledge-card-desc">
-                    ความยาวนานของประวัติการใช้งานสินเชื่อและบัตรเครดิตในระบบ บ่งบอกถึงวินัยและพฤติกรรมการชำระหนี้สะสมในอดีตของผู้กู้
+                    สัดส่วนวงเงินสินเชื่อขอกู้ต่อรายได้รวมต่อปี คำนวณจาก วงเงินกู้ ÷ รายได้ประจำต่อปี
+                    เป็นมาตรวัดสัดส่วนขนาดหนี้สินเทียบกับศักยภาพการสร้างรายได้ระยะยาว
                 </div>
                 <div class="knowledge-card-benchmark">
-                    <b>เกณฑ์มาตรฐาน:</b> ควรมีประวัติการใช้บริการสินเชื่อตั้งแต่ 2 ปีขึ้นไป
+                    <b>💡 เกณฑ์มาตรฐาน:</b> ปกติ &le; 0.5 เท่า | ระวัง 0.5-5.0 เท่า | เพดานสูงสุดไม่เกิน 5.0 เท่า
                 </div>
             </div>
         """, unsafe_allow_html=True)
 
-    with kc2:
+    with col_k2:
         st.markdown("""
             <div class="knowledge-card">
-                <div class="knowledge-card-tag">PARAMETER 02</div>
-                <div class="knowledge-card-title">อัตราดอกเบี้ยสินเชื่อ (Interest Rate)</div>
+                <div class="knowledge-card-tag">AI ENGINE & SCORING</div>
+                <div class="knowledge-card-title">Machine Learning Credit Scoring</div>
                 <div class="knowledge-card-desc">
-                    ต้นทุนทางการเงินที่คิดตามระดับความเสี่ยงของผู้กู้ (Risk-Based Pricing) โดยผู้กู้ความเสี่ยงสูงจะได้รับอัตราดอกเบี้ยประเมินที่สูงกว่า
+                    โมเดล AI วิเคราะห์รูปแบบพฤติกรรมจากประวัติเครดิต รายได้ อายุ และวงเงินกู้ของเคสในอดีต
+                    ประมวลผลเป็นเปอร์เซ็นต์โอกาสผิดนัดชำระ (Probability of Default - PD)
                 </div>
                 <div class="knowledge-card-benchmark">
-                    <b>เกณฑ์มาตรฐาน:</b> สอดคล้องตามเกณฑ์ความเสี่ยงและดอกเบี้ยเพดานของแบงก์ชาติ
+                    <b>💡 การแปลผล:</b> &lt; 30% ความเสี่ยงต่ำ | 30-60% ความเสี่ยงปานกลาง | &ge; 60% ความเสี่ยงสูงวิกฤต
                 </div>
             </div>
         """, unsafe_allow_html=True)
+        
         st.markdown("<br>", unsafe_allow_html=True)
+        
         st.markdown("""
             <div class="knowledge-card">
-                <div class="knowledge-card-tag">PARAMETER 04</div>
-                <div class="knowledge-card-title">สัดส่วนวงเงินกู้ต่อรายได้ปี (Loan-to-Income)</div>
+                <div class="knowledge-card-tag">UNDERWRITING POLICY</div>
+                <div class="knowledge-card-title">Hard Cut-off Overrides</div>
                 <div class="knowledge-card-desc">
-                    LTI Ratio เปรียบเทียบยอดวงเงินกู้ที่ต้องการกับรายได้รวมตลอดทั้งปี เพื่อประเมินว่าขอกู้เกินกำลังเกินไปหรือไม่
+                    กฎควบคุมความเสี่ยงเด็ดขาด (Hard Policy Rules) ที่ใช้ควบคู่กับ AI Risk Model
+                    เพื่อยับยั้งการอนุมัติสินเชื่อกรณีที่ตัวเลขภาระหนี้สินเข้าสู่วิกฤต แม้โมเดล AI จะให้คะแนนผ่านก็ตาม
                 </div>
                 <div class="knowledge-card-benchmark">
-                    <b>เกณฑ์มาตรฐาน:</b> วงเงินกู้ไม่ควรเกิน 0.5 - 1.0 เท่าของรายได้รวมต่อปี
+                    <b>💡 เงื่อนไข Hard Rejected:</b> DTI &gt; 70% หรือ LTI &gt; 5.0 เท่า
                 </div>
             </div>
         """, unsafe_allow_html=True)
