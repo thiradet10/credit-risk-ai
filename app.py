@@ -487,11 +487,12 @@ if not st.session_state.get('logged_in', False):
                             'name': reg_fullname,
                             'role': reg_role
                         }
-                        st.success("สมัครสมาชิกสำเร็จเรียบร้อยแล้ว ท่านสามารถเข้าสู่ระบบได้ทันที")
                         st.session_state['logged_in'] = False
                         st.session_state['user_info'] = None
                         st.session_state['eval_history'] = []  # เคลียร์ประวัติค้าง
-                        st.rerun()
+                        st.success("🎉 สมัครสมาชิกเสร็จสิ้น! ท่านสามารถสลับไปที่แท็บ 'เข้าสู่ระบบ' เพื่อใช้งานได้ทันที")
+                        st.toast("สมัครสมาชิกเสร็จสิ้นเรียบร้อยแล้ว!", icon="✅")
+                        st.balloons()
 
     st.stop()
 
